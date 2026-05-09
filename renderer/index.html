@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data:; media-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+        content="default-src 'self'; img-src 'self' data:; media-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval';" />
   <title>Local Shuffle</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -23,15 +23,34 @@
     </div>
     <div id="buttons-row">
       <button id="btn-open" title="フォルダを開く (O)">Open</button>
-      <button id="btn-prev" title="前へ (Shift+&lt;)">⏮</button>
+      <button id="btn-prev" title="前へ (Shift+B)">⏮</button>
       <button id="btn-playpause" title="再生/一時停止 (Space / K)">▶</button>
-      <button id="btn-next" title="次へ (Shift+&gt;)">⏭</button>
-      <button id="btn-shuffle" title="シャッフル (S)">🔀 Off</button>
+      <button id="btn-next" title="次へ (Shift+N)">⏭</button>
+      <button id="btn-shuffle" title="シャッフル (Shift+S)">🔀 Off</button>
       <button id="btn-mute" title="ミュート (M)">🔊</button>
       <input type="range" id="volume" min="0" max="100" value="80" step="1" title="音量 (↑↓)" />
+      <span id="speed" title="再生速度 — &gt; / &lt; で ±0.25, D / S で ±0.1, クリックで 1.00x">1.00x</span>
+      <button id="btn-properties" title="プロパティ (I)">ⓘ</button>
       <button id="btn-fullscreen" title="フルスクリーン (F)">⛶</button>
       <span id="filename"></span>
     </div>
+
+    <dialog id="properties-modal">
+      <div class="prop-frame">
+        <div class="prop-header">
+          <span class="prop-blip"></span>
+          <span class="prop-title">FILE_PROPERTIES</span>
+          <span class="prop-spacer"></span>
+          <button id="prop-close" class="prop-close" title="閉じる (Esc)">×</button>
+        </div>
+        <div class="prop-body" id="prop-body">
+          <div class="prop-loading">[ analyzing... ]</div>
+        </div>
+        <div class="prop-footer">
+          <span class="prop-cursor">_</span>
+        </div>
+      </div>
+    </dialog>
   </div>
 
   <script src="renderer.js"></script>

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const Store = require('electron-store');
+const MediaInfoFactory = require('mediainfo.js');
 
 const store = new Store({
   defaults: {
@@ -88,6 +89,70 @@ ipcMain.handle('store:get', (_evt, key) => store.get(key));
 ipcMain.handle('store:set', (_evt, key, value) => {
   store.set(key, value);
   return true;
+});
+
+const WASM_PATH = path.join(
+  __dirname,
+  'node_modules',
+  'mediainfo.js',
+  'dist',
+  'MediaInfoModule.wasm'
+);
+
+async function locateWasm() {
+  // electron-builder asarUnpack puts the file under app.asar.unpacked when packaged
+  const candidates = [
+    WASM_PATH,
+    WASM_PATH.replace(/app\.asar([\\/])/i, 'app.asar.unpacked$1')
+  ];
+  for (const c of candidates) {
+    try {
+      await fs.access(c);
+      return c;
+    } catch {}
+  }
+  return WASM_PATH;
+}
+
+ipcMain.handle('media:analyze', async (_evt, filePath) => {
+  let stat;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (err) {
+    return { error: 'cannot stat file: ' + String(err) };
+  }
+  const fileSize = stat.size;
+  let fh;
+  try {
+    fh = await fs.open(filePath, 'r');
+  } catch (err) {
+    return { error: 'cannot open file: ' + String(err) };
+  }
+  let mi;
+  try {
+    const wasmFile = await locateWasm();
+    const wasmBin = await fs.readFile(wasmFile);
+    mi = await MediaInfoFactory({
+      format: 'object',
+      locateFile: () => wasmFile,
+      // newer Emscripten-based builds also accept wasmBinary directly
+      wasmBinary: wasmBin
+    });
+    const result = await mi.analyzeData(
+      () => fileSize,
+      async (size, offset) => {
+        const buf = Buffer.alloc(size);
+        const { bytesRead } = await fh.read(buf, 0, size, offset);
+        return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+      }
+    );
+    return { ok: true, fileSize, result };
+  } catch (err) {
+    return { error: String(err && err.stack || err) };
+  } finally {
+    try { await fh.close(); } catch {}
+    try { mi && mi.close(); } catch {}
+  }
 });
 
 app.whenReady().then(createWindow);

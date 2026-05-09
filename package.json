@@ -1,6 +1,6 @@
 {
   "name": "local-shuffle-windows",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local video shuffle player for Windows with YouTube-compatible shortcuts",
   "license": "MIT",
   "author": "kouminiku-9900",
@@ -18,22 +18,22 @@
     "electron-builder": "^25.1.8"
   },
   "dependencies": {
-    "electron-store": "^8.2.0"
+    "electron-store": "^8.2.0",
+    "mediainfo.js": "^0.3.7"
   },
   "build": {
     "appId": "com.udzur.local-shuffle-windows",
     "productName": "LocalShuffle",
-    "files": [
-      "main.js",
-      "preload.js",
-      "renderer/**/*",
-      "package.json"
+    "asarUnpack": [
+      "node_modules/mediainfo.js/dist/MediaInfoModule.wasm"
     ],
     "win": {
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
