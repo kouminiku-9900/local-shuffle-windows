@@ -1,0 +1,127 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #000;
+  color: #eee;
+  height: 100%;
+  font-family: "Segoe UI", "Yu Gothic UI", system-ui, sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+#stage {
+  flex: 1;
+  position: relative;
+  background: #000;
+  min-height: 0;
+}
+
+#video {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  outline: none;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: #888;
+  font-size: 14px;
+}
+
+.overlay.hidden { display: none; }
+
+#controls {
+  background: rgba(20, 20, 22, 0.95);
+  border-top: 1px solid #2a2a2e;
+  padding: 6px 10px 8px;
+  flex: 0 0 auto;
+  transition: opacity 0.25s ease;
+}
+
+#seekbar-row,
+#buttons-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#seekbar-row { padding: 2px 0 4px; }
+
+#time-current,
+#time-total {
+  color: #bbb;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  min-width: 42px;
+  text-align: center;
+}
+
+#seekbar {
+  flex: 1;
+  accent-color: #ff3355;
+}
+
+#volume {
+  width: 90px;
+  accent-color: #ddd;
+}
+
+#filename {
+  flex: 1;
+  margin-left: 12px;
+  color: #aaa;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;       /* truncate from the head so the filename stays visible */
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+button {
+  background: #2a2a2e;
+  color: #eee;
+  border: 1px solid #3a3a3e;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s ease;
+}
+
+button:hover { background: #3a3a3e; }
+button:active { background: #444; }
+button:focus { outline: none; }
+
+input[type="range"] {
+  height: 16px;
+}
+
+/* Fullscreen: hide controls when idle */
+body.fullscreen.idle #controls {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.fullscreen #controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.7);
+}

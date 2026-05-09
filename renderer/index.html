@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data:; media-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>Local Shuffle</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="stage">
+    <video id="video" preload="metadata"></video>
+    <div id="empty-overlay" class="overlay">
+      <p>動画フォルダを開いてください (O キー)</p>
+    </div>
+  </div>
+
+  <div id="controls">
+    <div id="seekbar-row">
+      <span id="time-current">0:00</span>
+      <input type="range" id="seekbar" min="0" max="1000" value="0" step="1" />
+      <span id="time-total">0:00</span>
+    </div>
+    <div id="buttons-row">
+      <button id="btn-open" title="フォルダを開く (O)">Open</button>
+      <button id="btn-prev" title="前へ (Shift+&lt;)">⏮</button>
+      <button id="btn-playpause" title="再生/一時停止 (Space / K)">▶</button>
+      <button id="btn-next" title="次へ (Shift+&gt;)">⏭</button>
+      <button id="btn-shuffle" title="シャッフル (S)">🔀 Off</button>
+      <button id="btn-mute" title="ミュート (M)">🔊</button>
+      <input type="range" id="volume" min="0" max="100" value="80" step="1" title="音量 (↑↓)" />
+      <button id="btn-fullscreen" title="フルスクリーン (F)">⛶</button>
+      <span id="filename"></span>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
