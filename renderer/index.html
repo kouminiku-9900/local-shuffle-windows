@@ -88,7 +88,7 @@
               <input type="checkbox" id="setting-replaygain" />
               <div>
                 <div class="setting-title">ReplayGain(動画間の音量差を抑える)</div>
-                <div class="setting-desc">各動画の最初の数秒のラウドネスを測定して、その動画の再生中はゲインを固定。動画内では一定、動画間では揃うようにする。補正は ×0.5 〜 ×3.0。デフォルト オン。</div>
+                <div class="setting-desc">YouTube 系の手法に寄せて、K-weighting(ITU-R BS.1770 近似:38Hz HPF + 1.5kHz +4dB ハイシェルフ)を通したラウドネスを動画ごとに最大10秒間測定 → 中央値でゲインを **動画ごとに一度だけ固定**。補正幅は ×0.3 〜 ×4.0。一度測った動画のゲインはファイルパス単位でキャッシュされるので、次回以降は即座に適用される。動画内では一定、動画間では揃う。デフォルト オン。</div>
                 <div class="setting-desc" id="rg-status">locked gain: <code id="rg-gain">1.00x</code></div>
               </div>
             </label>

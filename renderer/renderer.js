@@ -69,37 +69,45 @@ class Playlist {
   }
 }
 
-// ===== Loudness normalizer (per-video lock) =====
-// Routes the <video> through Web Audio: source → (analyser tap) + gain → user-volume → destination.
-// For each video we sample RMS over the first few seconds, then LOCK the gain — no further
-// changes within the same video — so the level is steady. Different videos still get balanced
-// against each other because each gets its own measurement.
+// ===== Loudness normalizer (per-video lock, K-weighted) =====
+// Routes the <video> through Web Audio. The PLAYBACK chain is:
+//   source → replayGainNode → userVolNode → destination
+// The MEASUREMENT chain is a parallel dead-end:
+//   source → kHPF(38Hz) → kShelf(+4dB @1500Hz) → analyser
+// This approximates ITU-R BS.1770 K-weighting so the RMS we see correlates with
+// human-perceived loudness — the signal YouTube/EBU R128 measures (in LUFS).
+// For each video we sample for up to ~10 seconds (skipping silence), take the median
+// of the K-weighted RMS, then LOCK the gain for the remainder of playback. The result
+// is cached per file path so the same video locks instantly next time it plays.
 class LoudnessNormalizer {
-  constructor(videoEl, onGainUpdate) {
+  constructor(videoEl, onGainUpdate, onLock) {
     this.video = videoEl;
     this.onGainUpdate = onGainUpdate || (() => {});
+    this.onLock = onLock || (() => {});
     this.ctx = null;
     this.source = null;
+    this.kHPF = null;
+    this.kShelf = null;
     this.analyser = null;
     this.gain = null;
     this.userVol = null;
     this.buf = null;
     this.timer = null;
     this.enabled = true;
-    this.targetRms = 0.126;        // ~ -18 dBFS
-    this.minGain = 0.5;
-    this.maxGain = 3.0;
+
+    // K-weighted target ~ -14 LUFS (matches YouTube target). On the linearized
+    // K-weighted RMS scale this is roughly 0.20 for typical content.
+    this.targetRms = 0.20;
+    this.minGain = 0.3;
+    this.maxGain = 4.0;
     this.attached = false;
 
     // Per-video measurement state
     this.samples = [];
     this.locked = false;
-    this.minSamples = 5;          // need at least 1 second of audio
-    this.maxSamples = 25;         // ~5 seconds @ 200ms ticks
+    this.minSamples = 10;         // ~2 seconds @ 200ms ticks
+    this.maxSamples = 50;         // ~10 seconds @ 200ms ticks
     this.silenceFloor = 0.0008;
-
-    // Re-prime measurement on each new video
-    this.video.addEventListener('loadeddata', () => this._prime());
   }
 
   _ensureContext() {
@@ -109,19 +117,35 @@ class LoudnessNormalizer {
       if (!Ctx) return false;
       this.ctx = new Ctx();
       this.source = this.ctx.createMediaElementSource(this.video);
+
+      // K-weighting filters (ITU-R BS.1770 approximation)
+      this.kHPF = this.ctx.createBiquadFilter();
+      this.kHPF.type = 'highpass';
+      this.kHPF.frequency.value = 38;
+      this.kHPF.Q.value = 0.5;
+      this.kShelf = this.ctx.createBiquadFilter();
+      this.kShelf.type = 'highshelf';
+      this.kShelf.frequency.value = 1500;
+      this.kShelf.gain.value = 4;
+
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 2048;
+
       this.gain = this.ctx.createGain();
       this.gain.gain.value = 1.0;
       this.userVol = this.ctx.createGain();
-      // preserve whatever volume the slider set before the context existed
       this.userVol.gain.value = this.video.volume;
-      this.video.volume = 1.0; // route volume through Web Audio from now on
-      // Tap analyser from the raw source so RMS reflects the file, not our own gain.
-      this.source.connect(this.analyser);
+      this.video.volume = 1.0;
+
+      // Measurement chain: source → kHPF → kShelf → analyser (dead-end)
+      this.source.connect(this.kHPF);
+      this.kHPF.connect(this.kShelf);
+      this.kShelf.connect(this.analyser);
+      // Playback chain: source → gain → userVol → destination
       this.source.connect(this.gain);
       this.gain.connect(this.userVol);
       this.userVol.connect(this.ctx.destination);
+
       this.buf = new Float32Array(this.analyser.fftSize);
       this.attached = true;
       return true;
@@ -151,15 +175,23 @@ class LoudnessNormalizer {
       this._rampGain(1.0, 0.4);
       this.locked = true;            // freeze at unity while disabled
     } else {
-      this._prime();                  // re-measure now
+      this.resetForNewVideo();
     }
   }
 
-  _prime() {
+  resetForNewVideo() {
     // Reset measurement at the start of a new video.
     this.samples = [];
     this.locked = false;
     if (this.attached) this._rampGain(1.0, 0.05);
+  }
+
+  // Skip measurement and apply a known gain (cache hit path).
+  applyCached(gain) {
+    if (!this.attached || !this.enabled) return;
+    this.samples = [];
+    this.locked = true;
+    this._rampGain(gain, 0.4);
   }
 
   start() {
@@ -197,6 +229,7 @@ class LoudnessNormalizer {
     if (target > this.maxGain) target = this.maxGain;
     this._rampGain(target, 0.6);
     this.locked = true;
+    this.onLock(target);
   }
 
   _rampGain(value, secs) {
@@ -275,9 +308,22 @@ class Player {
     this.rgGainLabel = document.getElementById('rg-gain');
     this.replayGainCheckbox = document.getElementById('setting-replaygain');
 
-    this.normalizer = new LoudnessNormalizer(this.video, (g) => {
-      if (this.rgGainLabel) this.rgGainLabel.textContent = `${g.toFixed(2)}x`;
-    });
+    this.loudnessCache = {};
+    this._currentFile = null;
+
+    this.normalizer = new LoudnessNormalizer(
+      this.video,
+      (g) => {
+        if (this.rgGainLabel) this.rgGainLabel.textContent = `${g.toFixed(2)}x`;
+      },
+      (g) => {
+        // onLock: persist measured gain so the same file locks instantly next time.
+        if (this._currentFile) {
+          this.loudnessCache[this._currentFile] = g;
+          window.api.setStore('loudnessCache', this.loudnessCache);
+        }
+      }
+    );
 
     this._wireUI();
     this._wireVideoEvents();
@@ -286,14 +332,16 @@ class Player {
   }
 
   async init() {
-    const [vol, muted, shuf, mode, rg, bk] = await Promise.all([
+    const [vol, muted, shuf, mode, rg, bk, cache] = await Promise.all([
       window.api.getStore('volume'),
       window.api.getStore('isMuted'),
       window.api.getStore('isShuffled'),
       window.api.getStore('shortcutMode'),
       window.api.getStore('replayGain'),
-      window.api.getStore('bossKeyMode')
+      window.api.getStore('bossKeyMode'),
+      window.api.getStore('loudnessCache')
     ]);
+    if (cache && typeof cache === 'object') this.loudnessCache = cache;
     if (typeof vol === 'number') this.setVolume(vol, false);
     if (typeof muted === 'boolean') {
       this.video.muted = muted;
@@ -455,12 +503,27 @@ class Player {
     const file = this.playlist.current();
     if (!file) return;
     const prevRate = this.video.playbackRate;
+    // "Sticky pause": only auto-play the next video if the previous one was
+    // actually playing or had ended naturally. If the user paused, stay paused.
+    const shouldAutoPlay = !this.video.paused || this.video.ended;
     this.video.src = this._toFileURL(file);
     // preserve playback rate across video changes
     this.video.addEventListener('loadedmetadata', () => {
       this.video.playbackRate = prevRate;
     }, { once: true });
-    this.video.play().catch((err) => console.warn('play() rejected', err));
+
+    // Reset the loudness measurement; if we have a cached gain for this file,
+    // apply it immediately and skip re-measurement.
+    this._currentFile = file;
+    this.normalizer.resetForNewVideo();
+    const cached = this.loudnessCache && this.loudnessCache[file];
+    if (this.replayGainEnabled && typeof cached === 'number') {
+      this.normalizer.applyCached(cached);
+    }
+
+    if (shouldAutoPlay) {
+      this.video.play().catch((err) => console.warn('play() rejected', err));
+    }
     this.filenameLabel.textContent = this._displayPath(file);
     this._renderQueue();
   }
@@ -596,6 +659,10 @@ class Player {
     this.replayGainEnabled = !!on;
     window.api.setStore('replayGain', this.replayGainEnabled);
     this.normalizer.setEnabled(this.replayGainEnabled);
+    if (this.replayGainEnabled && this._currentFile) {
+      const cached = this.loudnessCache[this._currentFile];
+      if (typeof cached === 'number') this.normalizer.applyCached(cached);
+    }
   }
 
   // ===== Boss key =====
