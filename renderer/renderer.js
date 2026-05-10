@@ -69,10 +69,11 @@ class Playlist {
   }
 }
 
-// ===== Loudness normalizer (ReplayGain-style) =====
-// Routes the <video> through Web Audio: source → analyser (tap) → gain → destination.
-// Continuously measures RMS and adjusts the gain so different videos play at a similar
-// perceived loudness. Range clamped to avoid clipping or pumping.
+// ===== Loudness normalizer (per-video lock) =====
+// Routes the <video> through Web Audio: source → (analyser tap) + gain → user-volume → destination.
+// For each video we sample RMS over the first few seconds, then LOCK the gain — no further
+// changes within the same video — so the level is steady. Different videos still get balanced
+// against each other because each gets its own measurement.
 class LoudnessNormalizer {
   constructor(videoEl, onGainUpdate) {
     this.video = videoEl;
@@ -81,6 +82,7 @@ class LoudnessNormalizer {
     this.source = null;
     this.analyser = null;
     this.gain = null;
+    this.userVol = null;
     this.buf = null;
     this.timer = null;
     this.enabled = true;
@@ -89,7 +91,14 @@ class LoudnessNormalizer {
     this.maxGain = 3.0;
     this.attached = false;
 
-    // Re-prime analysis on each new video.
+    // Per-video measurement state
+    this.samples = [];
+    this.locked = false;
+    this.minSamples = 5;          // need at least 1 second of audio
+    this.maxSamples = 25;         // ~5 seconds @ 200ms ticks
+    this.silenceFloor = 0.0008;
+
+    // Re-prime measurement on each new video
     this.video.addEventListener('loadeddata', () => this._prime());
   }
 
@@ -138,12 +147,19 @@ class LoudnessNormalizer {
   setEnabled(on) {
     this.enabled = !!on;
     if (!this.attached) return;
-    if (!this.enabled) this._rampGain(1.0, 0.4);
+    if (!this.enabled) {
+      this._rampGain(1.0, 0.4);
+      this.locked = true;            // freeze at unity while disabled
+    } else {
+      this._prime();                  // re-measure now
+    }
   }
 
   _prime() {
-    // Force a small re-adapt at the start of a new video.
-    if (this.attached && this.enabled) this._rampGain(1.0, 0.05);
+    // Reset measurement at the start of a new video.
+    this.samples = [];
+    this.locked = false;
+    if (this.attached) this._rampGain(1.0, 0.05);
   }
 
   start() {
@@ -159,17 +175,28 @@ class LoudnessNormalizer {
 
   _tick() {
     if (!this.attached) return;
-    if (this.video.paused || this.video.ended || this.video.muted) return;
     if (!this.enabled) return;
+    if (this.locked) return;
+    if (this.video.paused || this.video.ended || this.video.muted) return;
     this.analyser.getFloatTimeDomainData(this.buf);
     let sum = 0;
     for (let i = 0; i < this.buf.length; i++) sum += this.buf[i] * this.buf[i];
     const rms = Math.sqrt(sum / this.buf.length);
-    if (rms < 0.0008) return; // ignore near-silence
-    let target = this.targetRms / rms;
+    if (rms < this.silenceFloor) return; // skip silent intros
+    this.samples.push(rms);
+    if (this.samples.length >= this.maxSamples) this._lock();
+  }
+
+  _lock() {
+    if (this.samples.length < this.minSamples) return;
+    // Median is robust against transient peaks/silences in the sampling window.
+    const sorted = this.samples.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    let target = this.targetRms / Math.max(median, this.silenceFloor);
     if (target < this.minGain) target = this.minGain;
     if (target > this.maxGain) target = this.maxGain;
-    this._rampGain(target, 0.5);
+    this._rampGain(target, 0.6);
+    this.locked = true;
   }
 
   _rampGain(value, secs) {
@@ -291,7 +318,7 @@ class Player {
     this.btnShuffle.addEventListener('click', () => this.toggleShuffle());
     this.btnMute.addEventListener('click', () => this.toggleMute());
     this.btnFullscreen.addEventListener('click', () => this.toggleFullscreen());
-    this.btnProperties.addEventListener('click', () => this.openProperties());
+    this.btnProperties.addEventListener('click', () => this.toggleProperties());
 
     this.speedLabel.addEventListener('click', () => this.setSpeed(1.0));
 
@@ -650,6 +677,10 @@ class Player {
   }
 
   // ===== Properties modal =====
+  toggleProperties() {
+    if (this.modal && this.modal.open) this.closeProperties();
+    else this.openProperties();
+  }
   async openProperties() {
     const file = this.playlist.current();
     if (!file) return;
@@ -717,6 +748,58 @@ class Player {
         ['bit depth', audio.BitDepth ? `${audio.BitDepth} bit` : '—'],
         ['language', audio.Language || '—']
       ]));
+    }
+
+    // ----- DEVICE / RECORDING (best-effort across container metadata) -----
+    const extra = general.extra || {};
+    const ciKey = (obj, ...names) => {
+      if (!obj) return undefined;
+      const lower = {};
+      for (const k of Object.keys(obj)) lower[k.toLowerCase()] = obj[k];
+      for (const n of names) {
+        const v = lower[n.toLowerCase()];
+        if (v !== undefined && v !== '') return v;
+      }
+      return undefined;
+    };
+
+    const make = ciKey(extra, 'com.apple.quicktime.make', 'make') ?? general.Make;
+    const model = ciKey(extra, 'com.apple.quicktime.model', 'model') ?? general.Model;
+    const software = ciKey(extra, 'com.apple.quicktime.software', 'software') ?? general.Encoded_Application ?? general.Encoded_Library;
+    const recordedDate = ciKey(extra, 'com.apple.quicktime.creationdate', 'creation_time', 'date_recorded')
+                        ?? general.Recorded_Date ?? general.Tagged_Date ?? general.File_Created_Date;
+    const encodedDate = general.Encoded_Date;
+    const gpsCoord = ciKey(extra, 'com.apple.quicktime.location.iso6709', 'location') ?? general.xyz;
+    const orientation = video && (video.Rotation || video.rotation);
+
+    const deviceRows = [
+      ['make', make],
+      ['model', model],
+      ['software', software],
+      ['recorded', recordedDate],
+      ['encoded', encodedDate],
+      ['orientation', orientation ? `${orientation}°` : null],
+      ['gps', gpsCoord],
+      ['title', general.Title],
+      ['author', general.Performer || general.Author || general.Artist],
+      ['comment', general.Comment]
+    ].filter(([, v]) => v !== null && v !== undefined && v !== '');
+
+    if (deviceRows.length > 0) {
+      sections.push(this._propSection('DEVICE / META', deviceRows));
+    }
+
+    // Catch-all: surface any remaining "extra" tags so unknown camera tags don't get lost
+    const known = new Set([
+      'com.apple.quicktime.make', 'com.apple.quicktime.model', 'com.apple.quicktime.software',
+      'com.apple.quicktime.creationdate', 'com.apple.quicktime.location.iso6709',
+      'make', 'model', 'software', 'creation_time', 'date_recorded', 'location'
+    ]);
+    const otherEntries = Object.entries(extra)
+      .filter(([k, v]) => !known.has(k.toLowerCase()) && v !== '' && v !== null && v !== undefined)
+      .map(([k, v]) => [k, String(v)]);
+    if (otherEntries.length > 0) {
+      sections.push(this._propSection('EXTRA TAGS', otherEntries.slice(0, 12)));
     }
 
     this.modalBody.innerHTML = sections.join('');
@@ -845,12 +928,6 @@ function installShortcuts(player) {
       return;
     }
 
-    // Shuffle: Shift+S (always)
-    if (e.shiftKey && (e.key === 'S' || e.key === 's')) {
-      e.preventDefault();
-      player.toggleShuffle();
-      return;
-    }
 
     // Simple-mode bare keys: B / N / , / . without Shift
     if (player.shortcutMode === 'simple' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
@@ -923,10 +1000,15 @@ function installShortcuts(player) {
         e.preventDefault();
         player.toggleQueue();
         return;
+      case 'r':
+      case 'R':
+        e.preventDefault();
+        player.toggleShuffle();
+        return;
       case 'i':
       case 'I':
         e.preventDefault();
-        player.openProperties();
+        player.toggleProperties();
         return;
       case 'o':
       case 'O':

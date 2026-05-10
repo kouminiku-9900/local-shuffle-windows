@@ -26,7 +26,7 @@
       <button id="btn-prev" title="前へ (Shift+B)">⏮</button>
       <button id="btn-playpause" title="再生/一時停止 (Space / K)">▶</button>
       <button id="btn-next" title="次へ (Shift+N)">⏭</button>
-      <button id="btn-shuffle" title="シャッフル (Shift+S)">🔀 Off</button>
+      <button id="btn-shuffle" title="シャッフル (R)">🔀 Off</button>
       <button id="btn-mute" title="ミュート (M)">🔊</button>
       <input type="range" id="volume" min="0" max="100" value="80" step="1" title="音量 (↑↓)" />
       <span id="speed" title="再生速度 — &gt; / &lt; で ±0.25, D / S で ±0.1, クリックで 1.00x">1.00x</span>
@@ -88,10 +88,17 @@
               <input type="checkbox" id="setting-replaygain" />
               <div>
                 <div class="setting-title">ReplayGain(動画間の音量差を抑える)</div>
-                <div class="setting-desc">再生中のラウドネス(RMS)を継続測定して、動画ごとの音量差を自動で揃える。クリッピングを防ぐため補正は ×0.5 〜 ×3.0 の範囲。デフォルト オン。</div>
-                <div class="setting-desc" id="rg-status">current gain: <code id="rg-gain">1.00x</code></div>
+                <div class="setting-desc">各動画の最初の数秒のラウドネスを測定して、その動画の再生中はゲインを固定。動画内では一定、動画間では揃うようにする。補正は ×0.5 〜 ×3.0。デフォルト オン。</div>
+                <div class="setting-desc" id="rg-status">locked gain: <code id="rg-gain">1.00x</code></div>
               </div>
             </label>
+          </div>
+
+          <div class="prop-section">
+            <div class="prop-section-head">[ EXPERIMENTAL / 開発中 ]</div>
+            <div class="setting-desc" style="padding: 8px 4px; opacity: 0.75;">
+              ここには将来テスト中の機能を追加していく予定。
+            </div>
           </div>
         </div>
         <div class="prop-footer">
