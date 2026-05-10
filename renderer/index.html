@@ -30,10 +30,60 @@
       <button id="btn-mute" title="ミュート (M)">🔊</button>
       <input type="range" id="volume" min="0" max="100" value="80" step="1" title="音量 (↑↓)" />
       <span id="speed" title="再生速度 — &gt; / &lt; で ±0.25, D / S で ±0.1, クリックで 1.00x">1.00x</span>
+      <button id="btn-queue" title="キューを表示 (Q)">≡</button>
       <button id="btn-properties" title="プロパティ (I)">ⓘ</button>
+      <button id="btn-settings" title="設定">⚙</button>
       <button id="btn-fullscreen" title="フルスクリーン (F)">⛶</button>
       <span id="filename"></span>
     </div>
+
+    <dialog id="settings-modal">
+      <div class="prop-frame">
+        <div class="prop-header">
+          <span class="prop-blip"></span>
+          <span class="prop-title">SETTINGS</span>
+          <span class="prop-spacer"></span>
+          <button id="settings-close" class="prop-close" title="閉じる (Esc)">×</button>
+        </div>
+        <div class="prop-body">
+          <div class="prop-section">
+            <div class="prop-section-head">[ SHORTCUT_MODE ]</div>
+            <label class="setting-row">
+              <input type="radio" name="shortcutMode" value="youtube" />
+              <div>
+                <div class="setting-title">YouTube 互換</div>
+                <div class="setting-desc">前/次/速度は <code>Shift+B</code> / <code>Shift+N</code> / <code>Shift+,</code> / <code>Shift+.</code></div>
+              </div>
+            </label>
+            <label class="setting-row">
+              <input type="radio" name="shortcutMode" value="simple" />
+              <div>
+                <div class="setting-title">シンプル(Shift 不要)</div>
+                <div class="setting-desc">前/次/速度を <code>B</code> / <code>N</code> / <code>,</code> / <code>.</code> だけで操作。Shift+ 版も併用可</div>
+              </div>
+            </label>
+          </div>
+        </div>
+        <div class="prop-footer">
+          <span class="prop-cursor">_</span>
+        </div>
+      </div>
+    </dialog>
+
+    <aside id="queue-panel" aria-hidden="true">
+      <div class="queue-frame">
+        <div class="queue-header">
+          <span class="prop-blip"></span>
+          <span class="queue-title">UP_NEXT</span>
+        </div>
+        <ol id="queue-list" class="queue-list"></ol>
+        <div class="queue-footer">
+          <span class="prop-cursor">_</span><span id="queue-count"></span>
+        </div>
+      </div>
+    </aside>
+
+    <div id="boss-overlay" aria-hidden="true"></div>
 
     <dialog id="properties-modal">
       <div class="prop-frame">

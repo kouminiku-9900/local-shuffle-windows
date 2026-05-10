@@ -56,6 +56,17 @@ class Playlist {
     }
     return this.current();
   }
+
+  upcoming(limit = 50) {
+    if (this.isEmpty) return [];
+    const out = [];
+    const n = this.order.length;
+    for (let i = 0; i < Math.min(limit, n); i++) {
+      const idx = (this.cursor + i) % n;
+      out.push({ rel: i, file: this.items[this.order[idx]] });
+    }
+    return out;
+  }
 }
 
 // ===== Speed helpers =====
@@ -103,6 +114,20 @@ class Player {
     this.modalBody = document.getElementById('prop-body');
     this.modalCloseBtn = document.getElementById('prop-close');
 
+    this.btnQueue = document.getElementById('btn-queue');
+    this.btnSettings = document.getElementById('btn-settings');
+    this.queuePanel = document.getElementById('queue-panel');
+    this.queueListEl = document.getElementById('queue-list');
+    this.queueCountEl = document.getElementById('queue-count');
+    this.bossOverlay = document.getElementById('boss-overlay');
+    this.settingsModal = document.getElementById('settings-modal');
+    this.settingsCloseBtn = document.getElementById('settings-close');
+
+    this.shortcutMode = 'youtube'; // 'youtube' | 'simple'
+    this.bossActive = false;
+    this.bossPrev = null;
+    this.queueOpen = false;
+
     this._wireUI();
     this._wireVideoEvents();
     this._initFullscreenAutoHide();
@@ -110,10 +135,11 @@ class Player {
   }
 
   async init() {
-    const [vol, muted, shuf] = await Promise.all([
+    const [vol, muted, shuf, mode] = await Promise.all([
       window.api.getStore('volume'),
       window.api.getStore('isMuted'),
-      window.api.getStore('isShuffled')
+      window.api.getStore('isShuffled'),
+      window.api.getStore('shortcutMode')
     ]);
     if (typeof vol === 'number') this.setVolume(vol, false);
     if (typeof muted === 'boolean') {
@@ -124,6 +150,7 @@ class Player {
       this.playlist.setShuffle(shuf);
       this._updateShuffleButton();
     }
+    if (mode === 'youtube' || mode === 'simple') this.shortcutMode = mode;
   }
 
   _wireUI() {
@@ -157,6 +184,25 @@ class Player {
       e.preventDefault();
       this.closeProperties();
     });
+
+    this.btnQueue.addEventListener('click', () => this.toggleQueue());
+    this.btnSettings.addEventListener('click', () => this.openSettings());
+    this.settingsCloseBtn.addEventListener('click', () => this.closeSettings());
+    this.settingsModal.addEventListener('click', (e) => {
+      if (e.target === this.settingsModal) this.closeSettings();
+    });
+    this.settingsModal.addEventListener('cancel', (e) => {
+      e.preventDefault();
+      this.closeSettings();
+    });
+    this.settingsModal.querySelectorAll('input[name="shortcutMode"]').forEach((r) => {
+      r.addEventListener('change', () => {
+        if (r.checked) this.setShortcutMode(r.value);
+      });
+    });
+
+    // boss key safety: release on window blur so it doesn't get stuck
+    window.addEventListener('blur', () => this.bossOff());
   }
 
   _wireVideoEvents() {
@@ -244,6 +290,7 @@ class Player {
     }, { once: true });
     this.video.play().catch((err) => console.warn('play() rejected', err));
     this.filenameLabel.textContent = this._displayPath(file);
+    this._renderQueue();
   }
 
   _displayPath(file) {
@@ -343,6 +390,79 @@ class Player {
     this.playlist.setShuffle(!this.playlist.isShuffled);
     window.api.setStore('isShuffled', this.playlist.isShuffled);
     this._updateShuffleButton();
+    this._renderQueue();
+  }
+
+  // ===== Settings =====
+  openSettings() {
+    if (!this.settingsModal.open) this.settingsModal.showModal();
+    this.settingsModal.querySelectorAll('input[name="shortcutMode"]').forEach((r) => {
+      r.checked = (r.value === this.shortcutMode);
+    });
+  }
+  closeSettings() {
+    if (this.settingsModal.open) this.settingsModal.close();
+  }
+  setShortcutMode(mode) {
+    if (mode !== 'youtube' && mode !== 'simple') return;
+    this.shortcutMode = mode;
+    window.api.setStore('shortcutMode', mode);
+  }
+
+  // ===== Boss key =====
+  bossOn() {
+    if (this.bossActive) return;
+    this.bossActive = true;
+    this.bossPrev = { paused: this.video.paused, muted: this.video.muted };
+    this.video.pause();
+    this.video.muted = true;
+    this.bossOverlay.classList.add('active');
+    this.bossOverlay.setAttribute('aria-hidden', 'false');
+  }
+  bossOff() {
+    if (!this.bossActive) return;
+    this.bossActive = false;
+    this.bossOverlay.classList.remove('active');
+    this.bossOverlay.setAttribute('aria-hidden', 'true');
+    if (this.bossPrev) {
+      this.video.muted = this.bossPrev.muted;
+      if (!this.bossPrev.paused) this.video.play().catch(() => {});
+    }
+    this.bossPrev = null;
+  }
+
+  // ===== Queue panel =====
+  toggleQueue() {
+    this.queueOpen = !this.queueOpen;
+    this.queuePanel.classList.toggle('open', this.queueOpen);
+    this.queuePanel.setAttribute('aria-hidden', this.queueOpen ? 'false' : 'true');
+    if (this.queueOpen) this._renderQueue();
+  }
+  closeQueue() {
+    if (!this.queueOpen) return;
+    this.queueOpen = false;
+    this.queuePanel.classList.remove('open');
+    this.queuePanel.setAttribute('aria-hidden', 'true');
+  }
+  _renderQueue() {
+    if (!this.queueListEl) return;
+    const items = this.playlist.upcoming(60);
+    const total = this.playlist.length;
+    if (items.length === 0) {
+      this.queueListEl.innerHTML = '<li><span class="qi-idx">—</span><span class="qi-name">empty</span></li>';
+      this.queueCountEl.textContent = '';
+      return;
+    }
+    const html = items.map((it) => {
+      const name = this._displayPath(it.file);
+      const isCurrent = it.rel === 0;
+      const idx = isCurrent ? '▶' : String(it.rel).padStart(2, '0');
+      return `<li class="${isCurrent ? 'queue-current' : ''}">` +
+             `<span class="qi-idx">${idx}</span>` +
+             `<span class="qi-name">${escapeHtml(name)}</span></li>`;
+    }).join('');
+    this.queueListEl.innerHTML = html;
+    this.queueCountEl.textContent = `[${total} items${this.playlist.isShuffled ? ' / shuffled' : ''}]`;
   }
 
   _updateShuffleButton() {
@@ -514,6 +634,18 @@ function installShortcuts(player) {
   window.addEventListener('keydown', (e) => {
     if (isTypingTarget(e.target)) return;
 
+    // Boss key — handle before everything else, even on key-repeat
+    if (e.key === 'w' || e.key === 'W') {
+      e.preventDefault();
+      player.bossOn();
+      return;
+    }
+    // While the boss screen is up, swallow other keys (except W up via keyup)
+    if (player.bossActive) {
+      e.preventDefault();
+      return;
+    }
+
     // Number keys (no shift) → jump to N×10%
     if (!e.shiftKey && !e.ctrlKey && !e.altKey && /^[0-9]$/.test(e.key)) {
       e.preventDefault();
@@ -521,7 +653,7 @@ function installShortcuts(player) {
       return;
     }
 
-    // Speed: > / < (Shift+. / Shift+,) → ±0.25
+    // Speed: Shift+> / Shift+< → ±0.25
     if (e.shiftKey && (e.key === '>' || e.key === '.')) {
       e.preventDefault();
       player.bumpSpeedQuarter(+1);
@@ -533,7 +665,7 @@ function installShortcuts(player) {
       return;
     }
 
-    // Next / Prev: Shift+N / Shift+B
+    // Next / Prev: Shift+N / Shift+B (always available)
     if (e.shiftKey && (e.key === 'N' || e.key === 'n')) {
       e.preventDefault();
       player.next();
@@ -545,11 +677,25 @@ function installShortcuts(player) {
       return;
     }
 
-    // Shuffle: Shift+S
+    // Shuffle: Shift+S (always)
     if (e.shiftKey && (e.key === 'S' || e.key === 's')) {
       e.preventDefault();
       player.toggleShuffle();
       return;
+    }
+
+    // Simple-mode bare keys: B / N / , / . without Shift
+    if (player.shortcutMode === 'simple' && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      switch (e.key) {
+        case 'n': case 'N':
+          e.preventDefault(); player.next(); return;
+        case 'b': case 'B':
+          e.preventDefault(); player.previous(); return;
+        case '.':
+          e.preventDefault(); player.bumpSpeedQuarter(+1); return;
+        case ',':
+          e.preventDefault(); player.bumpSpeedQuarter(-1); return;
+      }
     }
 
     switch (e.key) {
@@ -601,9 +747,13 @@ function installShortcuts(player) {
         player.bumpSpeedTenth(+1);
         return;
       case 's':
-        // bare 's' (no shift) = speed -0.1
         e.preventDefault();
         player.bumpSpeedTenth(-1);
+        return;
+      case 'q':
+      case 'Q':
+        e.preventDefault();
+        player.toggleQueue();
         return;
       case 'i':
       case 'I':
@@ -619,11 +769,25 @@ function installShortcuts(player) {
         if (player.modal && player.modal.open) {
           e.preventDefault();
           player.closeProperties();
+        } else if (player.settingsModal && player.settingsModal.open) {
+          e.preventDefault();
+          player.closeSettings();
+        } else if (player.queueOpen) {
+          e.preventDefault();
+          player.closeQueue();
         } else if (document.fullscreenElement) {
           e.preventDefault();
           document.exitFullscreen();
         }
         return;
+    }
+  });
+
+  // Boss key release
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'w' || e.key === 'W') {
+      e.preventDefault();
+      player.bossOff();
     }
   });
 }

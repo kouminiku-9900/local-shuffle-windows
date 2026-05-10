@@ -2,7 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const Store = require('electron-store');
-const MediaInfoFactory = require('mediainfo.js');
+const _miMod = require('mediainfo.js');
+const MediaInfoFactory = _miMod.default || _miMod.mediaInfoFactory || _miMod;
 
 const store = new Store({
   defaults: {
