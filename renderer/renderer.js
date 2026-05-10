@@ -69,6 +69,121 @@ class Playlist {
   }
 }
 
+// ===== Loudness normalizer (ReplayGain-style) =====
+// Routes the <video> through Web Audio: source → analyser (tap) → gain → destination.
+// Continuously measures RMS and adjusts the gain so different videos play at a similar
+// perceived loudness. Range clamped to avoid clipping or pumping.
+class LoudnessNormalizer {
+  constructor(videoEl, onGainUpdate) {
+    this.video = videoEl;
+    this.onGainUpdate = onGainUpdate || (() => {});
+    this.ctx = null;
+    this.source = null;
+    this.analyser = null;
+    this.gain = null;
+    this.buf = null;
+    this.timer = null;
+    this.enabled = true;
+    this.targetRms = 0.126;        // ~ -18 dBFS
+    this.minGain = 0.5;
+    this.maxGain = 3.0;
+    this.attached = false;
+
+    // Re-prime analysis on each new video.
+    this.video.addEventListener('loadeddata', () => this._prime());
+  }
+
+  _ensureContext() {
+    if (this.ctx) return true;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return false;
+      this.ctx = new Ctx();
+      this.source = this.ctx.createMediaElementSource(this.video);
+      this.analyser = this.ctx.createAnalyser();
+      this.analyser.fftSize = 2048;
+      this.gain = this.ctx.createGain();
+      this.gain.gain.value = 1.0;
+      this.userVol = this.ctx.createGain();
+      // preserve whatever volume the slider set before the context existed
+      this.userVol.gain.value = this.video.volume;
+      this.video.volume = 1.0; // route volume through Web Audio from now on
+      // Tap analyser from the raw source so RMS reflects the file, not our own gain.
+      this.source.connect(this.analyser);
+      this.source.connect(this.gain);
+      this.gain.connect(this.userVol);
+      this.userVol.connect(this.ctx.destination);
+      this.buf = new Float32Array(this.analyser.fftSize);
+      this.attached = true;
+      return true;
+    } catch (err) {
+      console.warn('LoudnessNormalizer init failed', err);
+      return false;
+    }
+  }
+
+  setUserVolume(v) {
+    v = Math.max(0, Math.min(1, v));
+    if (this.userVol && this.ctx) {
+      const t = this.ctx.currentTime;
+      try {
+        this.userVol.gain.cancelScheduledValues(t);
+        this.userVol.gain.setValueAtTime(v, t);
+      } catch {}
+    } else {
+      this.video.volume = v;
+    }
+  }
+
+  setEnabled(on) {
+    this.enabled = !!on;
+    if (!this.attached) return;
+    if (!this.enabled) this._rampGain(1.0, 0.4);
+  }
+
+  _prime() {
+    // Force a small re-adapt at the start of a new video.
+    if (this.attached && this.enabled) this._rampGain(1.0, 0.05);
+  }
+
+  start() {
+    if (!this._ensureContext()) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    if (this.timer) return;
+    this.timer = setInterval(() => this._tick(), 200);
+  }
+
+  stop() {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+  }
+
+  _tick() {
+    if (!this.attached) return;
+    if (this.video.paused || this.video.ended || this.video.muted) return;
+    if (!this.enabled) return;
+    this.analyser.getFloatTimeDomainData(this.buf);
+    let sum = 0;
+    for (let i = 0; i < this.buf.length; i++) sum += this.buf[i] * this.buf[i];
+    const rms = Math.sqrt(sum / this.buf.length);
+    if (rms < 0.0008) return; // ignore near-silence
+    let target = this.targetRms / rms;
+    if (target < this.minGain) target = this.minGain;
+    if (target > this.maxGain) target = this.maxGain;
+    this._rampGain(target, 0.5);
+  }
+
+  _rampGain(value, secs) {
+    if (!this.gain) return;
+    const t = this.ctx.currentTime;
+    try {
+      this.gain.gain.cancelScheduledValues(t);
+      this.gain.gain.setValueAtTime(this.gain.gain.value, t);
+      this.gain.gain.linearRampToValueAtTime(value, t + secs);
+      this.onGainUpdate(value);
+    } catch {}
+  }
+}
+
 // ===== Speed helpers =====
 const SPEED_MIN = 0.25;
 const SPEED_MAX = 3.0;
@@ -124,9 +239,18 @@ class Player {
     this.settingsCloseBtn = document.getElementById('settings-close');
 
     this.shortcutMode = 'youtube'; // 'youtube' | 'simple'
+    this.bossKeyMode = 'toggle';   // 'toggle' | 'hold'
+    this.replayGainEnabled = true;
     this.bossActive = false;
     this.bossPrev = null;
     this.queueOpen = false;
+
+    this.rgGainLabel = document.getElementById('rg-gain');
+    this.replayGainCheckbox = document.getElementById('setting-replaygain');
+
+    this.normalizer = new LoudnessNormalizer(this.video, (g) => {
+      if (this.rgGainLabel) this.rgGainLabel.textContent = `${g.toFixed(2)}x`;
+    });
 
     this._wireUI();
     this._wireVideoEvents();
@@ -135,11 +259,13 @@ class Player {
   }
 
   async init() {
-    const [vol, muted, shuf, mode] = await Promise.all([
+    const [vol, muted, shuf, mode, rg, bk] = await Promise.all([
       window.api.getStore('volume'),
       window.api.getStore('isMuted'),
       window.api.getStore('isShuffled'),
-      window.api.getStore('shortcutMode')
+      window.api.getStore('shortcutMode'),
+      window.api.getStore('replayGain'),
+      window.api.getStore('bossKeyMode')
     ]);
     if (typeof vol === 'number') this.setVolume(vol, false);
     if (typeof muted === 'boolean') {
@@ -151,6 +277,10 @@ class Player {
       this._updateShuffleButton();
     }
     if (mode === 'youtube' || mode === 'simple') this.shortcutMode = mode;
+    if (bk === 'toggle' || bk === 'hold') this.bossKeyMode = bk;
+    if (typeof rg === 'boolean') this.replayGainEnabled = rg;
+    this.normalizer.setEnabled(this.replayGainEnabled);
+    if (this.replayGainCheckbox) this.replayGainCheckbox.checked = this.replayGainEnabled;
   }
 
   _wireUI() {
@@ -200,6 +330,17 @@ class Player {
         if (r.checked) this.setShortcutMode(r.value);
       });
     });
+    this.settingsModal.querySelectorAll('input[name="bossKeyMode"]').forEach((r) => {
+      r.addEventListener('change', () => {
+        if (r.checked) this.setBossKeyMode(r.value);
+      });
+    });
+
+    if (this.replayGainCheckbox) {
+      this.replayGainCheckbox.addEventListener('change', () => {
+        this.setReplayGain(this.replayGainCheckbox.checked);
+      });
+    }
 
     // boss key safety: release on window blur so it doesn't get stuck
     window.addEventListener('blur', () => this.bossOff());
@@ -207,7 +348,11 @@ class Player {
 
   _wireVideoEvents() {
     this.video.addEventListener('ended', () => this.next());
-    this.video.addEventListener('play', () => { this.btnPlayPause.textContent = '⏸'; });
+    this.video.addEventListener('play', () => {
+      this.btnPlayPause.textContent = '⏸';
+      // Lazy-start the normalizer on first user-triggered play (AudioContext requires gesture)
+      this.normalizer.start();
+    });
     this.video.addEventListener('pause', () => { this.btnPlayPause.textContent = '▶'; });
     this.video.addEventListener('click', () => this.togglePlayPause());
     this.video.addEventListener('dblclick', (e) => {
@@ -349,7 +494,8 @@ class Player {
 
   setVolume(v, persist) {
     v = Math.max(0, Math.min(1, v));
-    this.video.volume = v;
+    this.userVolume = v;
+    this.normalizer.setUserVolume(v);
     this.volumeSlider.value = String(Math.round(v * 100));
     if (persist) window.api.setStore('volume', v);
   }
@@ -399,6 +545,10 @@ class Player {
     this.settingsModal.querySelectorAll('input[name="shortcutMode"]').forEach((r) => {
       r.checked = (r.value === this.shortcutMode);
     });
+    this.settingsModal.querySelectorAll('input[name="bossKeyMode"]').forEach((r) => {
+      r.checked = (r.value === this.bossKeyMode);
+    });
+    if (this.replayGainCheckbox) this.replayGainCheckbox.checked = this.replayGainEnabled;
   }
   closeSettings() {
     if (this.settingsModal.open) this.settingsModal.close();
@@ -407,6 +557,18 @@ class Player {
     if (mode !== 'youtube' && mode !== 'simple') return;
     this.shortcutMode = mode;
     window.api.setStore('shortcutMode', mode);
+  }
+  setBossKeyMode(mode) {
+    if (mode !== 'toggle' && mode !== 'hold') return;
+    this.bossKeyMode = mode;
+    window.api.setStore('bossKeyMode', mode);
+    // switching mode: release if currently on so the user isn't surprised
+    if (this.bossActive) this.bossOff();
+  }
+  setReplayGain(on) {
+    this.replayGainEnabled = !!on;
+    window.api.setStore('replayGain', this.replayGainEnabled);
+    this.normalizer.setEnabled(this.replayGainEnabled);
   }
 
   // ===== Boss key =====
@@ -634,13 +796,19 @@ function installShortcuts(player) {
   window.addEventListener('keydown', (e) => {
     if (isTypingTarget(e.target)) return;
 
-    // Boss key — handle before everything else, even on key-repeat
+    // Boss key — behaviour depends on bossKeyMode setting
     if (e.key === 'w' || e.key === 'W') {
       e.preventDefault();
-      player.bossOn();
+      if (e.repeat) return;
+      if (player.bossKeyMode === 'hold') {
+        player.bossOn();              // keyup will release
+      } else {
+        if (player.bossActive) player.bossOff();
+        else player.bossOn();
+      }
       return;
     }
-    // While the boss screen is up, swallow other keys (except W up via keyup)
+    // While the boss screen is up, swallow other keys
     if (player.bossActive) {
       e.preventDefault();
       return;
@@ -783,9 +951,9 @@ function installShortcuts(player) {
     }
   });
 
-  // Boss key release
+  // Boss key release for hold mode
   window.addEventListener('keyup', (e) => {
-    if (e.key === 'w' || e.key === 'W') {
+    if ((e.key === 'w' || e.key === 'W') && player.bossKeyMode === 'hold') {
       e.preventDefault();
       player.bossOff();
     }

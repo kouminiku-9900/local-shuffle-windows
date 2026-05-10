@@ -63,6 +63,36 @@
               </div>
             </label>
           </div>
+
+          <div class="prop-section">
+            <div class="prop-section-head">[ BOSS_KEY ]</div>
+            <label class="setting-row">
+              <input type="radio" name="bossKeyMode" value="toggle" />
+              <div>
+                <div class="setting-title">トグル(押すごとに切替)</div>
+                <div class="setting-desc"><code>W</code> を一度押すとオン、もう一度押すとオフ</div>
+              </div>
+            </label>
+            <label class="setting-row">
+              <input type="radio" name="bossKeyMode" value="hold" />
+              <div>
+                <div class="setting-title">ホールド(押している間だけ)</div>
+                <div class="setting-desc"><code>W</code> を押している間だけオン、離すとオフ</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="prop-section">
+            <div class="prop-section-head">[ AUDIO ]</div>
+            <label class="setting-row">
+              <input type="checkbox" id="setting-replaygain" />
+              <div>
+                <div class="setting-title">ReplayGain(動画間の音量差を抑える)</div>
+                <div class="setting-desc">再生中のラウドネス(RMS)を継続測定して、動画ごとの音量差を自動で揃える。クリッピングを防ぐため補正は ×0.5 〜 ×3.0 の範囲。デフォルト オン。</div>
+                <div class="setting-desc" id="rg-status">current gain: <code id="rg-gain">1.00x</code></div>
+              </div>
+            </label>
+          </div>
         </div>
         <div class="prop-footer">
           <span class="prop-cursor">_</span>
@@ -84,6 +114,7 @@
     </aside>
 
     <div id="boss-overlay" aria-hidden="true"></div>
+    <!-- W toggles boss mode (press once: on, press again: off) -->
 
     <dialog id="properties-modal">
       <div class="prop-frame">
