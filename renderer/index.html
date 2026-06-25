@@ -13,6 +13,12 @@
     <div id="empty-overlay" class="overlay">
       <p>動画フォルダを開いてください (O キー)</p>
     </div>
+    <div id="update-banner" class="update-banner hidden" aria-hidden="true">
+      <span class="ub-blip"></span>
+      <span class="ub-text"></span>
+      <button id="ub-download" class="ub-btn ub-primary">ダウンロード</button>
+      <button id="ub-dismiss" class="ub-btn" title="後で">後で</button>
+    </div>
   </div>
 
   <div id="controls">
@@ -90,6 +96,22 @@
                 <div class="setting-title">ReplayGain(動画間の音量差を抑える)</div>
                 <div class="setting-desc">YouTube 系の手法に寄せて、K-weighting(ITU-R BS.1770 近似:38Hz HPF + 1.5kHz +4dB ハイシェルフ)を通したラウドネスを動画ごとに最大10秒間測定 → 中央値でゲインを **動画ごとに一度だけ固定**。補正幅は ×0.3 〜 ×4.0。一度測った動画のゲインはファイルパス単位でキャッシュされるので、次回以降は即座に適用される。動画内では一定、動画間では揃う。デフォルト オン。</div>
                 <div class="setting-desc" id="rg-status">locked gain: <code id="rg-gain">1.00x</code></div>
+              </div>
+            </label>
+          </div>
+
+          <div class="prop-section">
+            <div class="prop-section-head">[ UPDATES ]</div>
+            <label class="setting-row">
+              <input type="checkbox" id="setting-autoupdate" />
+              <div>
+                <div class="setting-title">起動時に自動でアップデートを確認</div>
+                <div class="setting-desc">GitHub のリリースを起動時と定期的(6時間ごと)に確認し、新しいバージョンがあれば画面上部に通知します。<code>ダウンロード</code> を押すと配布ページ/exe をブラウザで開きます(ポータブル版のため自動置き換えは行いません)。デフォルト オン。</div>
+                <div class="setting-desc">
+                  現在のバージョン: <code id="app-version">—</code>
+                  <button type="button" id="btn-check-update" class="ub-btn">今すぐ確認</button>
+                </div>
+                <div class="setting-desc" id="update-status"></div>
               </div>
             </label>
           </div>

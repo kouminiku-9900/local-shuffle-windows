@@ -308,6 +308,18 @@ class Player {
     this.rgGainLabel = document.getElementById('rg-gain');
     this.replayGainCheckbox = document.getElementById('setting-replaygain');
 
+    // ----- Auto update -----
+    this.updateBanner = document.getElementById('update-banner');
+    this.ubText = this.updateBanner ? this.updateBanner.querySelector('.ub-text') : null;
+    this.ubDownloadBtn = document.getElementById('ub-download');
+    this.ubDismissBtn = document.getElementById('ub-dismiss');
+    this.autoUpdateCheckbox = document.getElementById('setting-autoupdate');
+    this.appVersionLabel = document.getElementById('app-version');
+    this.btnCheckUpdate = document.getElementById('btn-check-update');
+    this.updateStatusEl = document.getElementById('update-status');
+    this.autoUpdateEnabled = true;
+    this._latestUpdate = null;
+
     this.loudnessCache = {};
     this._currentFile = null;
 
@@ -332,15 +344,21 @@ class Player {
   }
 
   async init() {
-    const [vol, muted, shuf, mode, rg, bk, cache] = await Promise.all([
+    const [vol, muted, shuf, mode, rg, bk, cache, au] = await Promise.all([
       window.api.getStore('volume'),
       window.api.getStore('isMuted'),
       window.api.getStore('isShuffled'),
       window.api.getStore('shortcutMode'),
       window.api.getStore('replayGain'),
       window.api.getStore('bossKeyMode'),
-      window.api.getStore('loudnessCache')
+      window.api.getStore('loudnessCache'),
+      window.api.getStore('autoUpdateCheck')
     ]);
+    this.autoUpdateEnabled = (au !== false); // default on
+    if (this.autoUpdateCheckbox) this.autoUpdateCheckbox.checked = this.autoUpdateEnabled;
+    window.api.getVersion().then((v) => {
+      if (this.appVersionLabel && v) this.appVersionLabel.textContent = 'v' + v;
+    }).catch(() => {});
     if (cache && typeof cache === 'object') this.loudnessCache = cache;
     if (typeof vol === 'number') this.setVolume(vol, false);
     if (typeof muted === 'boolean') {
@@ -415,6 +433,21 @@ class Player {
       this.replayGainCheckbox.addEventListener('change', () => {
         this.setReplayGain(this.replayGainCheckbox.checked);
       });
+    }
+
+    if (this.ubDownloadBtn) {
+      this.ubDownloadBtn.addEventListener('click', () => this._downloadUpdate());
+    }
+    if (this.ubDismissBtn) {
+      this.ubDismissBtn.addEventListener('click', () => this._hideUpdateBanner());
+    }
+    if (this.autoUpdateCheckbox) {
+      this.autoUpdateCheckbox.addEventListener('change', () => {
+        this.setAutoUpdate(this.autoUpdateCheckbox.checked);
+      });
+    }
+    if (this.btnCheckUpdate) {
+      this.btnCheckUpdate.addEventListener('click', () => this._manualCheck());
     }
 
     // boss key safety: release on window blur so it doesn't get stuck
@@ -639,6 +672,7 @@ class Player {
       r.checked = (r.value === this.bossKeyMode);
     });
     if (this.replayGainCheckbox) this.replayGainCheckbox.checked = this.replayGainEnabled;
+    if (this.autoUpdateCheckbox) this.autoUpdateCheckbox.checked = this.autoUpdateEnabled;
   }
   closeSettings() {
     if (this.settingsModal.open) this.settingsModal.close();
@@ -662,6 +696,57 @@ class Player {
     if (this.replayGainEnabled && this._currentFile) {
       const cached = this.loudnessCache[this._currentFile];
       if (typeof cached === 'number') this.normalizer.applyCached(cached);
+    }
+  }
+
+  // ===== Auto update =====
+  setAutoUpdate(on) {
+    this.autoUpdateEnabled = !!on;
+    window.api.setStore('autoUpdateCheck', this.autoUpdateEnabled);
+  }
+
+  showUpdate(info) {
+    if (!info || !info.isNewer || !this.updateBanner) return;
+    this._latestUpdate = info;
+    if (this.ubText) {
+      this.ubText.textContent =
+        `新しいバージョン v${info.version} が利用可能です(現在 v${info.current})`;
+    }
+    this.updateBanner.classList.remove('hidden');
+    this.updateBanner.setAttribute('aria-hidden', 'false');
+  }
+
+  _hideUpdateBanner() {
+    if (!this.updateBanner) return;
+    this.updateBanner.classList.add('hidden');
+    this.updateBanner.setAttribute('aria-hidden', 'true');
+  }
+
+  _downloadUpdate() {
+    const info = this._latestUpdate;
+    const url = info && (info.downloadUrl || info.pageUrl);
+    if (url) window.api.openDownload(url);
+  }
+
+  async _manualCheck() {
+    if (this.updateStatusEl) this.updateStatusEl.textContent = '[ 確認中... ]';
+    let info = null;
+    try {
+      info = await window.api.checkForUpdates();
+    } catch {}
+    if (!info) {
+      if (this.updateStatusEl) {
+        this.updateStatusEl.textContent = '[ 確認に失敗しました(ネットワーク?)]';
+      }
+      return;
+    }
+    if (info.isNewer) {
+      if (this.updateStatusEl) {
+        this.updateStatusEl.textContent = `[ 新しいバージョン v${info.version} があります ]`;
+      }
+      this.showUpdate(info);
+    } else if (this.updateStatusEl) {
+      this.updateStatusEl.textContent = `[ 最新版です (v${info.current}) ]`;
     }
   }
 
@@ -1118,4 +1203,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.api.onRestoreFolder((folder) => {
     player.loadFolder(folder).catch((err) => console.warn(err));
   });
+
+  window.api.onUpdateAvailable((info) => player.showUpdate(info));
+  window.api.onUpdateError((msg) => console.warn('update check error:', msg));
 });

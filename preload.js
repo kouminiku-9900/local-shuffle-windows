@@ -8,5 +8,17 @@ contextBridge.exposeInMainWorld('api', {
   analyzeMedia: (filePath) => ipcRenderer.invoke('media:analyze', filePath),
   onRestoreFolder: (cb) => {
     ipcRenderer.on('app:restoreFolder', (_evt, folderPath) => cb(folderPath));
+  },
+  getVersion: () => ipcRenderer.invoke('app:getVersion'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  openDownload: (url) => ipcRenderer.invoke('update:openDownload', url),
+  onUpdateAvailable: (cb) => {
+    ipcRenderer.on('app:updateAvailable', (_evt, info) => cb(info));
+  },
+  onUpdateNotAvailable: (cb) => {
+    ipcRenderer.on('app:updateNotAvailable', (_evt, info) => cb(info));
+  },
+  onUpdateError: (cb) => {
+    ipcRenderer.on('app:updateError', (_evt, msg) => cb(msg));
   }
 });
